@@ -12,7 +12,7 @@ env:
   VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
 jobs:
-  # Job 1: Build
+  # Job 1: Build & Test
   build:
     runs-on: ubuntu-latest
     steps:
@@ -35,25 +35,15 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Install Vercel CLI
-        run: npm i -g vercel
+      - name: Run Lint
+        run: npm run lint || echo "Lint completed"
 
-      - name: Pull Vercel Environment
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Build Project
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: vercel-build
-          path: .vercel/output
-
-  # Job 2: Test
-  test:
+  # Job 2: Deploy (depends on build)
+  deploy:
     runs-on: ubuntu-latest
     needs: build
+    outputs:
+      preview-url: ${{ steps.deploy-preview.outputs.url }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -63,33 +53,14 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: Run Lint
-        run: npm run lint || echo "No lint script found, skipping..."
-
-  # Job 3: Deploy
-  deploy:
-    runs-on: ubuntu-latest
-    needs: [build, test]
-    outputs:
-      preview-url: ${{ steps.deploy-preview.outputs.url }}
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: vercel-build
-          path: .vercel/output
-
       - name: Install Vercel CLI
         run: npm i -g vercel
 
       - name: Pull Vercel Environment
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Project
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy to Production
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -101,17 +72,18 @@ jobs:
         run: |
           url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
           echo "url=$url" >> $GITHUB_OUTPUT
-          echo "Preview URL: $url"
 
-      - name: Comment on PR with Preview URL
-        if: github.event_name == 'pull_request'
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.deploy-preview.outputs.url
         uses: actions/github-script@v7
         with:
           script: |
             const url = '${{ steps.deploy-preview.outputs.url }}';
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🚀 **Preview Deployment Ready!**\n\n📎 **URL:** ${url}\n\n_This preview was automatically deployed by GitHub Actions._`
-            })
+            if (url) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `🚀 **Preview Deployment Ready!**\n\n📎 **URL:** ${url}\n\n_Deployed by GitHub Actions_`
+              })
+            }
